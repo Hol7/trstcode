@@ -1,11 +1,13 @@
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import ShikiViewer from "./ShikiViewer";
 import TerminalPane from "./TerminalPane";
+import { Locale, MessageKey, translate } from "./i18n";
 import "./App.css";
 
 type Scope = "global" | "project";
-type EntryKind = "command" | "code" | "note";
+type EntryKind = "command" | "code" | "note" | "quicknote";
+type Theme = "dark" | "light";
 type Project = { id: string; name: string; path?: string; createdAt: number };
 type Entry = {
   id: string;
@@ -135,7 +137,7 @@ function detectLanguage(value: string) {
 }
 
 function formatContent(value: string, language: string, kind: EntryKind) {
-  if (kind === "note") return value.trim();
+  if (isNoteKind(kind)) return value.trim();
   const trimmed = value.trim();
   if (language === "json") {
     try {
@@ -169,8 +171,8 @@ function assessRisk(command: string): Risk {
 function folderName(path: string) {
   return path.split("/").filter(Boolean).pop() || "Project";
 }
-function shortPath(path?: string) {
-  if (!path) return "Workspace only";
+function shortPath(path?: string, emptyLabel = "Workspace only") {
+  if (!path) return emptyLabel;
   const parts = path.split("/").filter(Boolean);
   return parts.length > 3 ? `…/${parts.slice(-2).join("/")}` : path;
 }
@@ -180,7 +182,9 @@ const languageLabel: Record<string, string> = {
   javascript: "JS", python: "PY", json: "{}", text: "TXT", html: "<>", css: "CSS",
   rust: "RS", go: "GO", php: "PHP", yaml: "YML",
 };
-const kindLabel: Record<EntryKind, string> = { command: "Command", code: "Code", note: "Note" };
+function isNoteKind(kind: EntryKind) {
+  return kind === "note" || kind === "quicknote";
+}
 
 function App() {
   const [entries, setEntries] = useState<Entry[]>(loadEntries);
@@ -196,7 +200,26 @@ function App() {
   const [editing, setEditing] = useState<Entry | null>(null);
   const [projectCreator, setProjectCreator] = useState(false);
   const [riskCommand, setRiskCommand] = useState("");
+  const [locale, setLocale] = useState<Locale>(() => store.read("trstcode.locale", "fr"));
+  const [theme, setTheme] = useState<Theme>(() => store.read("trstcode.theme", "dark"));
+  const [quickEditing, setQuickEditing] = useState<Entry | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Entry | null>(null);
+  const [toast, setToast] = useState("");
+  const [copiedId, setCopiedId] = useState("");
   const sendRef = useRef<(command: string) => Promise<void>>(async () => undefined);
+  const toastTimer = useRef<number | undefined>(undefined);
+  const copyTimer = useRef<number | undefined>(undefined);
+  const tx = (key: MessageKey, variables?: Record<string, string | number>) => translate(locale, key, variables);
+  const labelForKind = (kind: EntryKind) => tx(kind === "quicknote" ? "quickNote" : kind);
+
+  useEffect(() => () => {
+    window.clearTimeout(toastTimer.current);
+    window.clearTimeout(copyTimer.current);
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    store.write("trstcode.theme", theme);
+  }, [theme]);
 
   const project = projects.find((item) => item.id === activeProjectId);
   const active = entries.find((item) => item.id === activeId);
@@ -205,7 +228,7 @@ function App() {
     const term = query.trim().toLowerCase();
     return entries
       .filter((item) => filter !== "starred" || item.favorite)
-      .filter((item) => !["command", "code", "note"].includes(filter) || item.kind === filter)
+      .filter((item) => !["command", "code", "note"].includes(filter) || (filter === "note" ? isNoteKind(item.kind) : item.kind === filter))
       .filter((item) => item.scope === "global" || item.project === activeProjectId)
       .filter((item) => [item.title, item.content, item.description, ...item.tags].join(" ").toLowerCase().includes(term));
   }, [activeProjectId, entries, filter, query]);
@@ -217,6 +240,26 @@ function App() {
   function persistProjects(next: Project[]) {
     setProjects(next);
     store.write("trstcode.workspaces.v2", next);
+  }
+  function notify(message: string) {
+    setToast(message);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(""), 2400);
+  }
+  function changeLocale(next: Locale) {
+    setLocale(next);
+    store.write("trstcode.locale", next);
+  }
+  async function copyContent(value: string, id: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedId(id);
+      notify(tx("copied"));
+      window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopiedId(""), 1200);
+    } catch {
+      notify(tx("copyFailed"));
+    }
   }
   function prependRun(run: Run) {
     setRuns((current) => {
@@ -283,7 +326,7 @@ function App() {
       kind,
       title: "",
       content: prefill,
-      language: kind === "note" ? "text" : detectLanguage(prefill),
+      language: isNoteKind(kind) ? "text" : detectLanguage(prefill),
       project: activeProjectId,
       scope: "project",
       description: "",
@@ -302,16 +345,20 @@ function App() {
     setActiveId(saved.id);
     setCommand(saved.kind === "command" ? saved.content : "");
     setEditing(null);
+    setQuickEditing(null);
+    notify(entry.id ? tx("updated") : tx(saved.kind === "command" ? "createdCommand" : saved.kind === "code" ? "createdCode" : saved.kind === "quicknote" ? "createdQuickNote" : "createdNote"));
   }
   function selectEntry(entry: Entry) {
     setActiveId(entry.id);
     setCommand(entry.kind === "command" ? entry.content : "");
   }
-  function deleteEntry(id: string) {
-    if (!window.confirm("Delete this entry? This cannot be undone.")) return;
-    persistEntries(entries.filter((item) => item.id !== id));
+  function deleteEntry() {
+    if (!deleteTarget) return;
+    persistEntries(entries.filter((item) => item.id !== deleteTarget.id));
     setActiveId("");
     setCommand("");
+    setDeleteTarget(null);
+    notify(tx("deleted"));
   }
 
   if (!project) {
@@ -319,37 +366,38 @@ function App() {
       <main className="onboarding">
         <header className="simple-header">
           <button className="brand brand-button" onClick={showHome}><span className="brand-mark">›_</span><strong>trstcode</strong></button>
-          <span>local developer workspace</span>
+          <div className="header-tools"><span>{tx("localWorkspace")}</span><ThemeControl theme={theme} onChange={setTheme} tx={tx} /><LocaleControl locale={locale} onChange={changeLocale} tx={tx} /></div>
         </header>
         <section className="onboarding-body">
           <div className="onboarding-copy">
-            <span className="eyebrow">START HERE</span>
-            <h1>Keep what matters.<br /><em>Run it when needed.</em></h1>
-            <p>Create a simple workspace for notes and code, or connect a local folder when you also need a real terminal.</p>
+            <span className="eyebrow">{tx("startHere")}</span>
+            <h1>{tx("heroTitle")}<br /><em>{tx("heroAccent")}</em></h1>
+            <p>{tx("heroText")}</p>
             <div className="home-actions">
-              <button className="open-project" onClick={chooseFolder}>Open project folder <b>→</b></button>
-              <button className="workspace-only-button" onClick={() => setProjectCreator(true)}>New empty workspace</button>
+              <button className="open-project" onClick={chooseFolder}>{tx("openFolder")} <b>→</b></button>
+              <button className="workspace-only-button" onClick={() => setProjectCreator(true)}>{tx("newWorkspace")}</button>
             </div>
           </div>
           <div className="flow-card">
-            <span className="eyebrow">YOU CAN KEEP</span>
-            {[["›_", "Commands", "Run them in folder-backed projects"], ["{ }", "Code & scripts", "Read 100+ lines with syntax highlighting"], ["Aa", "Notes", "Save ideas, reminders and words"]].map(([icon, title, text]) => (
+            <span className="eyebrow">{tx("youCanKeep")}</span>
+            {[["›_", tx("commands"), tx("commandsHelp")], ["{ }", tx("codeScripts"), tx("codeHelp")], ["Aa", tx("notes"), tx("notesHelp")], ["✦", tx("quickNotes"), tx("quickNotesHelp")]].map(([icon, title, text]) => (
               <div className="content-kind" key={title}><b>{icon}</b><span><strong>{title}</strong><small>{text}</small></span></div>
             ))}
           </div>
           {projects.length > 0 && (
             <div className="recent-projects">
-              <span className="eyebrow">YOUR WORKSPACES</span>
+              <span className="eyebrow">{tx("yourWorkspaces")}</span>
               {projects.map((item) => (
                 <button key={item.id} onClick={() => activateProject(item)}>
                   <span className="folder-icon">{item.path ? "▰" : "◇"}</span>
-                  <span><strong>{item.name}</strong><small>{shortPath(item.path)}</small></span><b>→</b>
+                  <span><strong>{item.name}</strong><small>{shortPath(item.path, tx("workspaceOnlyPath"))}</small></span><b>→</b>
                 </button>
               ))}
             </div>
           )}
         </section>
-        {projectCreator && <ProjectCreator onClose={() => setProjectCreator(false)} onCreate={(name) => addProject({ id: crypto.randomUUID(), name, createdAt: Date.now() })} />}
+        {projectCreator && <ProjectCreator tx={tx} onClose={() => setProjectCreator(false)} onCreate={(name) => addProject({ id: crypto.randomUUID(), name, createdAt: Date.now() })} />}
+        {toast && <Toast message={toast} />}
       </main>
     );
   }
@@ -357,143 +405,239 @@ function App() {
   return (
     <main className="app-shell with-tabs">
       <header className="titlebar" data-tauri-drag-region>
-        <button className="brand brand-button" onClick={showHome} title="Back to home"><span className="brand-mark">›_</span><strong>trstcode</strong></button>
-        <div className="active-project-summary"><span className="status-dot" /><span><b>{project.name}</b><small>{shortPath(project.path)}</small></span></div>
-        <div className="title-actions"><span className="local-badge">LOCAL ONLY</span>{project.path && <button onClick={() => setSessionKey((key) => key + 1)}>Restart terminal</button>}</div>
+        <button className="brand brand-button" onClick={showHome} title={tx("backHome")}><span className="brand-mark">›_</span><strong>trstcode</strong></button>
+        <div className="active-project-summary"><span className="status-dot" /><span><b>{project.name}</b><small>{shortPath(project.path, tx("workspaceOnlyPath"))}</small></span></div>
+        <div className="title-actions"><ThemeControl theme={theme} onChange={setTheme} tx={tx} /><LocaleControl locale={locale} onChange={changeLocale} tx={tx} /><span className="local-badge">{tx("localOnly")}</span>{project.path && <button onClick={() => setSessionKey((key) => key + 1)}>{tx("restartTerminal")}</button>}</div>
       </header>
-      <nav className="project-tabs" aria-label="Open projects">
-        <button className="home-tab" onClick={showHome} title="Home">⌂</button>
+      <nav className="project-tabs" aria-label={tx("openProjects")}>
+        <button className="home-tab" onClick={showHome} title={tx("home")}>⌂</button>
         {openedProjects.map((item) => (
           <button key={item.id} className={item.id === activeProjectId ? "active" : ""} onClick={() => activateProject(item)}>
             <span>{item.path ? "▰" : "◇"}</span>{item.name}
             <i onClick={(event) => { event.stopPropagation(); closeTab(item.id); }}>×</i>
           </button>
         ))}
-        <button className="new-tab" onClick={() => setProjectCreator(true)} title="New workspace">＋</button>
+        <button className="new-tab" onClick={() => setProjectCreator(true)} title={tx("addWorkspace")}>＋</button>
       </nav>
 
       <section className="workspace">
         <aside className="vault panel">
-          <div className="panel-heading"><div><span className="eyebrow">YOUR LIBRARY</span><h2>{project.name}</h2></div><button className="square-button" onClick={() => openCreate("command")}>+</button></div>
-          <label className="search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search commands, code, notes…" /></label>
+          <div className="panel-heading"><div><span className="eyebrow">{tx("yourLibrary")}</span><h2>{project.name}</h2></div><button className="square-button" onClick={() => openCreate("command")}>+</button></div>
+          <label className="search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={tx("search")} /></label>
           <div className="filters entry-filters">
-            {(["all", "command", "code", "note", "starred"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "All" : value === "starred" ? "★" : kindLabel[value]}</button>)}
+            {(["all", "command", "code", "note", "starred"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? tx("all") : value === "starred" ? "★" : labelForKind(value)}</button>)}
           </div>
           <div className="snippet-list">
             {filtered.map((entry) => (
               <button key={entry.id} aria-label={entry.title} className={`snippet ${activeId === entry.id ? "selected" : ""}`} onClick={() => selectEntry(entry)}>
-                <span className={`lang kind-${entry.kind}`}>{entry.kind === "note" ? "Aa" : languageLabel[entry.language] || "TXT"}</span>
-                <span><strong>{entry.title}</strong><code>{entry.content.replace(/\n/g, " ")}</code><small>{kindLabel[entry.kind]} · {entry.scope === "global" ? "Global" : project.name}</small></span>
+                <span className={`lang kind-${entry.kind}`}>{entry.kind === "quicknote" ? "✦" : entry.kind === "note" ? "Aa" : languageLabel[entry.language] || "TXT"}</span>
+                <span><strong>{entry.kind === "quicknote" ? entry.content.split("\n")[0] : entry.title}</strong>{entry.kind !== "quicknote" && <code>{entry.content.replace(/\n/g, " ")}</code>}<small>{labelForKind(entry.kind)} · {entry.scope === "global" ? tx("global") : project.name}</small></span>
                 <i className={entry.favorite ? "on" : ""} onClick={(e) => { e.stopPropagation(); persistEntries(entries.map((item) => item.id === entry.id ? { ...item, favorite: !item.favorite } : item)); }}>★</i>
               </button>
             ))}
-            {!filtered.length && <div className="list-empty">Nothing here yet.</div>}
+            {!filtered.length && <div className="list-empty">{tx("nothingHere")}</div>}
           </div>
           <div className="create-entry-bar">
-            <button onClick={() => openCreate("command")}>›_ Command</button>
-            <button onClick={() => openCreate("code")}>{"{ }"} Code</button>
-            <button onClick={() => openCreate("note")}>Aa Note</button>
+            <button onClick={() => openCreate("command")}>›_ {tx("command")}</button>
+            <button onClick={() => openCreate("code")}>{"{ }"} {tx("code")}</button>
+            <button onClick={() => openCreate("note")}>Aa {tx("note")}</button>
+            <button className="quick-note-trigger" onClick={() => setQuickEditing({ id: "", kind: "quicknote", title: "", content: "", language: "text", project: activeProjectId, scope: "project", description: "", tags: [], favorite: false, createdAt: Date.now() })}>✦ {tx("quickNote")}</button>
           </div>
         </aside>
 
         <section className={`terminal-workspace panel ${active && active.kind !== "command" ? "viewing-entry" : !project.path ? "workspace-only" : ""}`}>
-          {active?.kind === "code" && <EntryViewer entry={active} onEdit={() => setEditing(active)} onCopy={() => navigator.clipboard.writeText(active.content)} />}
-          {active?.kind === "note" && <EntryViewer entry={active} onEdit={() => setEditing(active)} onCopy={() => navigator.clipboard.writeText(active.content)} />}
+          {active?.kind === "code" && <EntryViewer entry={active} tx={tx} copied={copiedId === active.id} onEdit={() => setEditing(active)} onCopy={() => copyContent(active.content, active.id)} onInlineSave={saveEntry} />}
+          {active && isNoteKind(active.kind) && <EntryViewer entry={active} tx={tx} copied={copiedId === active.id} onEdit={() => active.kind === "quicknote" ? setQuickEditing(active) : setEditing(active)} onCopy={() => copyContent(active.content, active.id)} onInlineSave={saveEntry} />}
           {(!active || active.kind === "command") && project.path && (
             <>
-              <div className="workspace-header"><div><span className="green-dot" /><b>Terminal</b><small>{shortPath(project.path)}</small></div><span>zsh · persistent session</span></div>
+              <div className="workspace-header"><div><span className="green-dot" /><b>{tx("terminal")}</b><small>{shortPath(project.path, tx("workspaceOnlyPath"))}</small></div><span>zsh · {tx("persistentSession")}</span></div>
               <div className="guided-runner">
-                <div className="runner-topline"><span className="eyebrow">{active ? `COMMAND / ${active.title}` : "GUIDED RUN"}</span><span className={`risk-pill ${assessRisk(command).level}`}>{assessRisk(command).level}</span></div>
-                <textarea value={command} onChange={(e) => { setCommand(e.target.value); if (active && e.target.value !== active.content) setActiveId(""); }} placeholder="Paste a command here, or use the terminal directly below…" spellCheck={false} />
-                <div className="runner-actions"><span>{languageLabel[detectLanguage(command)] || "TXT"} · Review before running.</span><div>{command.trim() && !active && <button onClick={() => openCreate("command", command)}>Save</button>}{active && <button onClick={() => setEditing(active)}>Edit</button>}<button className="run-button" onClick={() => execute()}>Run in {project.name} ↵</button></div></div>
+                <div className="runner-topline"><span className="eyebrow">{active ? `${tx("command").toUpperCase()} / ${active.title}` : tx("guidedRun")}</span><span className={`risk-pill ${assessRisk(command).level}`}>{assessRisk(command).level}</span></div>
+                <textarea value={command} onChange={(e) => { setCommand(e.target.value); if (active && e.target.value !== active.content) setActiveId(""); }} placeholder={tx("pasteCommand")} spellCheck={false} />
+                <div className="runner-actions"><span>{languageLabel[detectLanguage(command)] || "TXT"} · {tx("reviewBeforeRun")}</span><div>{command.trim() && !active && <button onClick={() => openCreate("command", command)}>{tx("save")}</button>}{active && <button onClick={() => setEditing(active)}>{tx("edit")}</button>}<button className="run-button" onClick={() => execute()}>{tx("runIn", { name: project.name })}</button></div></div>
               </div>
-              <div className="terminal-label"><span>LIVE TERMINAL</span><span>Click below to type directly</span></div>
+              <div className="terminal-label"><span>{tx("liveTerminal")}</span><span>{tx("clickToType")}</span></div>
               <TerminalPane directory={project.path} sessionKey={sessionKey} onCommand={recordTerminalCommand} onReady={(send) => { sendRef.current = send; }} />
             </>
           )}
           {!active && !project.path && (
             <div className="workspace-welcome">
-              <span className="eyebrow">WORKSPACE ONLY</span><h2>{project.name}</h2>
-              <p>This workspace does not need a folder. Save code, scripts, notes, words and reusable commands here.</p>
-              <div><button onClick={() => openCreate("code")}>Add code or script</button><button onClick={() => openCreate("note")}>Write a note</button><button onClick={chooseFolder}>Open a folder-backed project</button></div>
+              <span className="eyebrow">{tx("workspaceOnly")}</span><h2>{project.name}</h2>
+              <p>{tx("workspaceOnlyHelp")}</p>
+              <div><button onClick={() => openCreate("code")}>{tx("addCode")}</button><button onClick={() => openCreate("note")}>{tx("writeNote")}</button><button onClick={() => setQuickEditing({ id: "", kind: "quicknote", title: "", content: "", language: "text", project: activeProjectId, scope: "project", description: "", tags: [], favorite: false, createdAt: Date.now() })}>{tx("addQuickNote")}</button><button onClick={chooseFolder}>{tx("openFolder")}</button></div>
             </div>
           )}
         </section>
 
         <aside className="activity panel">
-          <div className="panel-heading compact"><div><span className="eyebrow">{active ? "SELECTED" : "ACTIVITY"}</span><h2>{active ? kindLabel[active.kind] : "Command history"}</h2></div></div>
+          <div className="panel-heading compact"><div><span className="eyebrow">{active ? tx("selected") : tx("activity")}</span><h2>{active ? labelForKind(active.kind) : tx("commandHistory")}</h2></div></div>
           {active ? (
             <div className="entry-inspector">
-              <span className={`entry-kind-badge ${active.kind}`}>{kindLabel[active.kind]}</span><h3>{active.title}</h3>
-              <p>{active.description || "No description yet."}</p>
-              <dl><div><dt>Language</dt><dd>{active.kind === "note" ? "Plain text" : active.language}</dd></div><div><dt>Length</dt><dd>{active.content.split("\n").length} lines</dd></div><div><dt>Scope</dt><dd>{active.scope === "global" ? "Every workspace" : project.name}</dd></div></dl>
+              <span className={`entry-kind-badge ${active.kind}`}>{labelForKind(active.kind)}</span>{active.kind !== "quicknote" && <h3>{active.title}</h3>}
+              {active.kind !== "quicknote" && <p>{active.description || tx("noDescription")}</p>}
+              <dl><div><dt>{tx("language")}</dt><dd>{isNoteKind(active.kind) ? tx("plainText") : active.language}</dd></div><div><dt>{tx("length")}</dt><dd>{active.content.split("\n").length} {tx("lines")}</dd></div><div><dt>{tx("scope")}</dt><dd>{active.scope === "global" ? tx("everyWorkspace") : project.name}</dd></div></dl>
               <div className="tag-row">{active.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
-              <div className="inspector-actions"><button onClick={() => navigator.clipboard.writeText(active.content)}>Copy</button><button onClick={() => setEditing(active)}>Edit</button><button className="danger-text" onClick={() => deleteEntry(active.id)}>Delete</button></div>
+              <div className="inspector-actions"><button className={`copy-button ${copiedId === active.id ? "copied" : ""}`} onClick={() => copyContent(active.content, active.id)}>{copiedId === active.id ? `✓ ${tx("copied")}` : tx("copy")}</button><button onClick={() => active.kind === "quicknote" ? setQuickEditing(active) : setEditing(active)}>{tx("edit")}</button><button className="danger-text" onClick={() => setDeleteTarget(active)}>{tx("delete")}</button></div>
             </div>
           ) : project.path ? (
             <div className="history-list">{runs.filter((run) => run.projectId === project.id).map((run) => <button key={run.id} className="history-item" onClick={() => { setCommand(run.command); setActiveId(""); }}><span className="history-arrow">↳</span><span><code>{run.command}</code><small>{new Date(run.ranAt).toLocaleString()}</small></span><b>＋</b></button>)}</div>
-          ) : <div className="empty-history"><span>◇</span><strong>Your quiet workspace</strong><p>Select an entry to inspect it, or create your first note or code snippet.</p></div>}
+          ) : <div className="empty-history"><span>◇</span><strong>{tx("quietWorkspace")}</strong><p>{tx("quietWorkspaceHelp")}</p></div>}
         </aside>
       </section>
 
-      {editing && <EntryEditor initial={editing} project={project} onClose={() => setEditing(null)} onSave={saveEntry} />}
-      {projectCreator && <ProjectCreator onClose={() => setProjectCreator(false)} onCreate={(name) => addProject({ id: crypto.randomUUID(), name, createdAt: Date.now() })} onFolder={chooseFolder} />}
-      {riskCommand && <div className="modal-backdrop"><div className="risk-dialog"><span className="risk-icon">!</span><span className="eyebrow">REVIEW BEFORE RUNNING</span><h2>This command needs your attention</h2><p>It will run inside <b>{project.path}</b>.</p><pre>{riskCommand}</pre><ul>{assessRisk(riskCommand).reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><div className="dialog-actions"><button onClick={() => setRiskCommand("")}>Cancel</button><button className="danger-button" onClick={() => runApproved(riskCommand)}>I understand — run it</button></div></div></div>}
+      {editing && <EntryEditor initial={editing} project={project} tx={tx} onClose={() => setEditing(null)} onSave={saveEntry} />}
+      {quickEditing && <QuickNoteEditor initial={quickEditing} tx={tx} onClose={() => setQuickEditing(null)} onSave={saveEntry} />}
+      {projectCreator && <ProjectCreator tx={tx} onClose={() => setProjectCreator(false)} onCreate={(name) => addProject({ id: crypto.randomUUID(), name, createdAt: Date.now() })} onFolder={chooseFolder} />}
+      {deleteTarget && <DeleteConfirmation entry={deleteTarget} tx={tx} onCancel={() => setDeleteTarget(null)} onConfirm={deleteEntry} />}
+      {riskCommand && <div className="modal-backdrop"><div className="risk-dialog"><span className="risk-icon">!</span><span className="eyebrow">{tx("reviewBeforeRun")}</span><h2>{tx("reviewTitle")}</h2><p>{tx("runsInside")} <b>{project.path}</b>.</p><pre>{riskCommand}</pre><ul>{assessRisk(riskCommand).reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><div className="dialog-actions"><button onClick={() => setRiskCommand("")}>{tx("cancel")}</button><button className="danger-button" onClick={() => runApproved(riskCommand)}>{tx("understandRun")}</button></div></div></div>}
+      {toast && <Toast message={toast} />}
     </main>
   );
 }
 
-function EntryViewer({ entry, onEdit, onCopy }: { entry: Entry; onEdit: () => void; onCopy: () => void }) {
+type Tx = (key: MessageKey, variables?: Record<string, string | number>) => string;
+
+function EntryViewer({ entry, tx, copied, onEdit, onCopy, onInlineSave }: { entry: Entry; tx: Tx; copied: boolean; onEdit: () => void; onCopy: () => void; onInlineSave: (entry: Entry) => void }) {
+  const label = tx(entry.kind === "quicknote" ? "quickNote" : entry.kind);
+  const [inlineEditing, setInlineEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.content);
+  useEffect(() => setDraft(entry.content), [entry.content, entry.id]);
+  function saveInline() {
+    const content = draft.trim();
+    setInlineEditing(false);
+    if (!content || content === entry.content) {
+      setDraft(entry.content);
+      return;
+    }
+    onInlineSave({
+      ...entry,
+      content,
+      title: entry.kind === "quicknote" ? content.split("\n")[0].slice(0, 80) : entry.title,
+    });
+  }
+  const inlineKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") event.currentTarget.blur();
+    if (event.key === "Escape") {
+      setDraft(entry.content);
+      setInlineEditing(false);
+    }
+  };
   return (
     <div className={`entry-viewer ${entry.kind}`}>
-      <header><div><span className="eyebrow">{kindLabel[entry.kind]} / {entry.kind === "note" ? "PLAIN TEXT" : entry.language.toUpperCase()}</span><h1>{entry.title}</h1><p>{entry.description}</p></div><div><button onClick={onCopy}>Copy</button><button onClick={onEdit}>Edit</button></div></header>
-      {entry.kind === "code" ? <ShikiViewer code={entry.content} language={entry.language} /> : <article className="note-view">{entry.content}</article>}
-      <footer><span>{entry.content.split("\n").length} lines</span><span>{entry.content.length} characters</span></footer>
+      <header><div><span className="eyebrow">{label} / {isNoteKind(entry.kind) ? tx("plainText").toUpperCase() : entry.language.toUpperCase()}</span>{entry.kind !== "quicknote" && <><h1>{entry.title}</h1><p>{entry.description}</p></>}</div><div><button className={`copy-button ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? `✓ ${tx("copied")}` : tx("copy")}</button><button onClick={onEdit}>{tx("edit")}</button></div></header>
+      {entry.kind === "code" ? (
+        inlineEditing
+          ? <textarea className="code-inline-editor" autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={saveInline} onKeyDown={inlineKeyDown} spellCheck={false} />
+          : <div className="code-clickable" onClick={() => setInlineEditing(true)} title={tx("clickCode")}><ShikiViewer code={entry.content} language={entry.language} /><small>✎ {tx("clickCode")}</small></div>
+      ) : entry.kind === "quicknote" ? (
+        inlineEditing
+          ? <textarea className="quick-note-inline-editor" autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={saveInline} onKeyDown={(event) => {
+              inlineKeyDown(event);
+            }} />
+          : <article className="note-view quick-note-clickable" onClick={() => setInlineEditing(true)} title={tx("clickQuickNote")}><span>{entry.content}</span><small>✎ {tx("clickQuickNote")}</small></article>
+      ) : <article className="note-view">{entry.content}</article>}
+      <footer><span>{entry.content.split("\n").length} {tx("lines")}</span><span>{entry.content.length} {tx("characters")}</span></footer>
     </div>
   );
 }
 
-function EntryEditor({ initial, project, onClose, onSave }: { initial: Entry; project: Project; onClose: () => void; onSave: (entry: Entry) => void }) {
+function EntryEditor({ initial, project, tx, onClose, onSave }: { initial: Entry; project: Project; tx: Tx; onClose: () => void; onSave: (entry: Entry) => void }) {
   const [value, setValue] = useState(initial);
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!value.title.trim() || !value.content.trim()) return;
-    onSave({ ...value, language: value.kind === "note" ? "text" : value.language || detectLanguage(value.content), tags: value.tags.filter(Boolean) });
+    onSave({ ...value, language: isNoteKind(value.kind) ? "text" : value.language || detectLanguage(value.content), tags: value.tags.filter(Boolean) });
   }
-  const codeLike = value.kind !== "note";
+  const codeLike = !isNoteKind(value.kind);
+  const label = (kind: EntryKind) => tx(kind === "quicknote" ? "quickNote" : kind);
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <form className="snippet-editor large-editor" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-heading"><div><span className="eyebrow">{value.id ? "EDIT ENTRY" : "NEW ENTRY"}</span><h2>{value.id ? value.title : `Save ${kindLabel[value.kind].toLowerCase()}`}</h2></div><button type="button" onClick={onClose}>×</button></div>
-        <div className="kind-picker">{(["command", "code", "note"] as EntryKind[]).map((kind) => <button type="button" key={kind} className={value.kind === kind ? "active" : ""} onClick={() => setValue({ ...value, kind, language: kind === "note" ? "text" : value.language === "text" ? detectLanguage(value.content) : value.language })}>{kind === "command" ? "›_ Command" : kind === "code" ? "{ } Code / script" : "Aa Note"}</button>)}</div>
-        <label>Title<input autoFocus value={value.title} onChange={(e) => setValue({ ...value, title: e.target.value })} placeholder={value.kind === "note" ? "Deployment checklist" : "User creation helper"} /></label>
-        <label>Description<input value={value.description} onChange={(e) => setValue({ ...value, description: e.target.value })} placeholder="When or why is this useful?" /></label>
-        <label>{value.kind === "command" ? "Command" : value.kind === "code" ? "Code or script" : "Note"}<textarea className={`code-input ${value.kind === "code" ? "long-code-input" : ""}`} value={value.content} onChange={(e) => setValue({ ...value, content: e.target.value, language: value.kind === "note" ? "text" : detectLanguage(e.target.value) })} placeholder={value.kind === "note" ? "Write anything you want to remember…" : "Paste your code here…"} spellCheck={value.kind === "note"} /></label>
+        <div className="modal-heading"><div><span className="eyebrow">{value.id ? tx("editEntry") : tx("newEntry")}</span><h2>{value.id ? value.title : tx("saveKind", { kind: label(value.kind).toLowerCase() })}</h2></div><button type="button" onClick={onClose}>×</button></div>
+        <div className="kind-picker">{(["command", "code", "note"] as EntryKind[]).map((kind) => <button type="button" key={kind} className={value.kind === kind ? "active" : ""} onClick={() => setValue({ ...value, kind, language: kind === "note" ? "text" : value.language === "text" ? detectLanguage(value.content) : value.language })}>{kind === "command" ? `›_ ${tx("command")}` : kind === "code" ? `{ } ${tx("codeOrScript")}` : `Aa ${tx("note")}`}</button>)}</div>
+        <label>{tx("title")}<input autoFocus value={value.title} onChange={(e) => setValue({ ...value, title: e.target.value })} placeholder={value.kind === "note" ? "Checklist de déploiement" : "User creation helper"} /></label>
+        <label>{tx("description")}<input value={value.description} onChange={(e) => setValue({ ...value, description: e.target.value })} placeholder={tx("usefulWhen")} /></label>
+        <label>{value.kind === "command" ? tx("command") : value.kind === "code" ? tx("codeOrScript") : tx("note")}<textarea className={`code-input ${value.kind === "code" ? "long-code-input" : ""}`} value={value.content} onChange={(e) => setValue({ ...value, content: e.target.value, language: value.kind === "note" ? "text" : detectLanguage(e.target.value) })} placeholder={value.kind === "note" ? tx("notePlaceholder") : tx("codePlaceholder")} spellCheck={value.kind === "note"} /></label>
         <div className="editor-row">
-          {codeLike && <label>Language<select value={value.language} onChange={(e) => setValue({ ...value, language: e.target.value })}>{["shell", "typescript", "javascript", "elixir", "python", "ruby", "sql", "json", "html", "css", "rust", "go", "php", "yaml", "text"].map((lang) => <option key={lang}>{lang}</option>)}</select></label>}
-          <label>Availability<select value={value.scope} onChange={(e) => setValue({ ...value, scope: e.target.value as Scope, project: e.target.value === "project" ? project.id : "" })}><option value="project">{project.name} only</option><option value="global">Every workspace</option></select></label>
+          {codeLike && <label>{tx("language")}<select value={value.language} onChange={(e) => setValue({ ...value, language: e.target.value })}>{["shell", "typescript", "javascript", "elixir", "python", "ruby", "sql", "json", "html", "css", "rust", "go", "php", "yaml", "text"].map((lang) => <option key={lang}>{lang}</option>)}</select></label>}
+          <label>{tx("availability")}<select value={value.scope} onChange={(e) => setValue({ ...value, scope: e.target.value as Scope, project: e.target.value === "project" ? project.id : "" })}><option value="project">{tx("projectOnly", { name: project.name })}</option><option value="global">{tx("everyWorkspace")}</option></select></label>
         </div>
-        <label>Tags<input value={value.tags.join(", ")} onChange={(e) => setValue({ ...value, tags: e.target.value.split(",").map((tag) => tag.trim()) })} placeholder="elixir, auth, helper" /></label>
-        <div className="format-note">{value.kind === "code" ? <>Detected as <b>{value.language}</b> · {value.content.split("\n").length} lines · Shiki preview after saving.</> : "Notes are saved as readable plain text."}</div>
-        <div className="dialog-actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Save {kindLabel[value.kind].toLowerCase()}</button></div>
+        <label>{tx("tags")}<input value={value.tags.join(", ")} onChange={(e) => setValue({ ...value, tags: e.target.value.split(",").map((tag) => tag.trim()) })} placeholder="elixir, auth, helper" /></label>
+        <div className="format-note">{value.kind === "code" ? tx("detectedAs", { language: value.language, lines: value.content.split("\n").length }) : tx("noteFormat")}</div>
+        <div className="dialog-actions"><button type="button" onClick={onClose}>{tx("cancel")}</button><button className="primary-button" type="submit">{tx("saveKind", { kind: label(value.kind).toLowerCase() })}</button></div>
       </form>
     </div>
   );
 }
 
-function ProjectCreator({ onClose, onCreate, onFolder }: { onClose: () => void; onCreate: (name: string) => void; onFolder?: () => void }) {
+function ProjectCreator({ tx, onClose, onCreate, onFolder }: { tx: Tx; onClose: () => void; onCreate: (name: string) => void; onFolder?: () => void }) {
   const [name, setName] = useState("");
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <form className="project-creator" onSubmit={(e) => { e.preventDefault(); if (name.trim()) onCreate(name.trim()); }} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-heading"><div><span className="eyebrow">NEW WORKSPACE</span><h2>What are you keeping?</h2></div><button type="button" onClick={onClose}>×</button></div>
-        <p>A workspace can hold notes, code and commands without being connected to a folder.</p>
-        <label>Name<input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Backend notes" /></label>
-        <button className="create-workspace-primary" type="submit">Create empty workspace</button>
-        {onFolder && <button className="choose-folder-secondary" type="button" onClick={onFolder}>Or open a local project folder</button>}
+        <div className="modal-heading"><div><span className="eyebrow">{tx("newWorkspace").toUpperCase()}</span><h2>{tx("newWorkspaceTitle")}</h2></div><button type="button" onClick={onClose}>×</button></div>
+        <p>{tx("workspaceHelp")}</p>
+        <label>{tx("name")}<input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Backend notes" /></label>
+        <button className="create-workspace-primary" type="submit">{tx("createWorkspace")}</button>
+        {onFolder && <button className="choose-folder-secondary" type="button" onClick={onFolder}>{tx("orOpenFolder")}</button>}
       </form>
     </div>
   );
+}
+
+function QuickNoteEditor({ initial, tx, onClose, onSave }: { initial: Entry; tx: Tx; onClose: () => void; onSave: (entry: Entry) => void }) {
+  const [content, setContent] = useState(initial.content);
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form className="quick-note-editor" onSubmit={(event) => {
+        event.preventDefault();
+        const cleaned = content.trim();
+        if (!cleaned) return;
+        onSave({ ...initial, title: cleaned.split("\n")[0].slice(0, 80), content: cleaned, description: "", tags: [], language: "text" });
+      }} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-heading"><div><span className="eyebrow">✦ {tx("quickNote").toUpperCase()}</span><h2>{tx("quickNoteTitle")}</h2></div><button type="button" onClick={onClose}>×</button></div>
+        <textarea autoFocus value={content} onChange={(event) => setContent(event.target.value)} placeholder={tx("quickNotePlaceholder")} />
+        <div className="dialog-actions"><button type="button" onClick={onClose}>{tx("cancel")}</button><button className="primary-button" type="submit">{tx("saveQuickNote")}</button></div>
+      </form>
+    </div>
+  );
+}
+
+function DeleteConfirmation({ entry, tx, onCancel, onConfirm }: { entry: Entry; tx: Tx; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={onCancel}>
+      <div className="delete-dialog" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <span className="delete-dialog-icon">×</span>
+        <span className="eyebrow">{tx("confirmDelete")}</span>
+        <h2>{tx("deleteTitle")}</h2>
+        <p>{tx("deleteHelp")}</p>
+        <blockquote>{entry.kind === "quicknote" ? entry.content : entry.title}</blockquote>
+        <div className="dialog-actions"><button onClick={onCancel}>{tx("cancel")}</button><button className="danger-button" onClick={onConfirm}>{tx("confirmDeleteButton")}</button></div>
+      </div>
+    </div>
+  );
+}
+
+function LocaleControl({ locale, onChange, tx }: { locale: Locale; onChange: (locale: Locale) => void; tx: Tx }) {
+  return (
+    <div className="locale-control" aria-label={tx("changeLanguage")}>
+      <button className={locale === "fr" ? "active" : ""} onClick={() => onChange("fr")} title={tx("french")}>FR</button>
+      <button className={locale === "en" ? "active" : ""} onClick={() => onChange("en")} title={tx("english")}>EN</button>
+    </div>
+  );
+}
+
+function ThemeControl({ theme, onChange, tx }: { theme: Theme; onChange: (theme: Theme) => void; tx: Tx }) {
+  const next = theme === "dark" ? "light" : "dark";
+  return (
+    <button className="theme-control" onClick={() => onChange(next)} title={next === "light" ? tx("lightTheme") : tx("darkTheme")} aria-label={tx("changeTheme")}>
+      <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
+    </button>
+  );
+}
+
+function Toast({ message }: { message: string }) {
+  return <div className="toast" role="status"><span>✓</span>{message}</div>;
 }
 
 export default App;
