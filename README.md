@@ -7,7 +7,7 @@ A local developer workspace for commands, code, scripts, notes, and real termina
 1. Create an empty workspace or open a local project folder.
 2. Save commands, long code/scripts, or plain notes.
 3. Navigate between open workspaces using project tabs.
-4. Read code with Shiki syntax highlighting.
+4. Read code with Shiki syntax highlighting and edit it in an IDE-style CodeMirror editor.
 5. In folder-backed projects, review and run commands in a persistent terminal.
 
 ## Included
@@ -18,6 +18,9 @@ A local developer workspace for commands, code, scripts, notes, and real termina
 - Navigable tabs for multiple open projects
 - Commands, long code/scripts, and notes as separate entry types
 - Shiki syntax highlighting with explicit language selection
+- CodeMirror editor with line numbers, folding, indentation, undo/redo and language-aware editing
+- Direct editing for code and quick notes
+- French and English interface with persistent light and dark themes
 - Project-specific and global entries
 - Search, favorites, tags, descriptions, editing, and deletion
 - Clickable per-project command history
@@ -42,9 +45,19 @@ Frontend build:
 npm run build
 ```
 
+Native installer for the current operating system:
+
+```sh
+npm run desktop:build
+```
+
 Native compile check:
 
 ```sh
 cd src-tauri
 cargo check
 ```
+
+See [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md) for cross-platform releases,
+download statistics and the recommended private-source/public-community GitHub
+structure. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing changes.

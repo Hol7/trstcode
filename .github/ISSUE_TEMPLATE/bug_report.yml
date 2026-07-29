@@ -1,0 +1,45 @@
+name: Bug report
+description: Report something that is not working in trstcode.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: trstcode version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Explain what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open…
+        2. Click…
+        3. See…
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Screenshots or logs
+      description: Remove passwords, tokens and other secrets before sharing.

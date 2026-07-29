@@ -112,6 +112,8 @@ const messages = {
     clickQuickNote: "Cliquez dans la note pour écrire",
     quickNoteSaved: "Note enregistrée",
     clickCode: "Cliquez dans le code pour le modifier",
+    close: "Fermer",
+    commandFormat: "Les commandes sont détectées et prêtes à être copiées ou exécutées dans un projet lié à un dossier.",
   },
   en: {
     localWorkspace: "local developer workspace",
@@ -224,6 +226,8 @@ const messages = {
     clickQuickNote: "Click the note to start writing",
     quickNoteSaved: "Note saved",
     clickCode: "Click the code to edit it",
+    close: "Close",
+    commandFormat: "Commands are detected and ready to copy or run in a folder-backed project.",
   },
 } as const;
 

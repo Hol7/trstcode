@@ -151,7 +151,13 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 .code-clickable > small { position: absolute; right: 14px; bottom: 25px; z-index: 2; padding: 5px 7px; border: 1px solid #4b5047; background: #171917e8; color: #b8c69a; font: 8px var(--mono); opacity: .65; pointer-events: none; }
 .code-clickable:hover > small { border-color: var(--lime); opacity: 1; }
 .code-clickable:hover .shiki-viewer { border-color: #687552; }
-.code-inline-editor { min-height: 0; width: 100%; margin-top: 16px; padding: 20px; resize: none; border: 1px solid #687552; outline: 0; background: #121312; color: #e8e7e2; caret-color: var(--lime); font: 12px/1.65 var(--mono); tab-size: 2; }
+.code-editor { min-height: 0; overflow: hidden; border: 1px solid #687552; background: #121312; font: 12px/1.65 var(--mono); text-align: left; }
+.code-editor .cm-editor { height: 100%; }
+.code-editor .cm-scroller { overflow: auto; font-family: var(--mono); }
+.code-editor .cm-content { padding: 14px 0; }
+.code-editor .cm-line { padding: 0 10px; }
+.code-editor .cm-focused { outline: 1px solid var(--lime); outline-offset: -1px; }
+.code-inline-editor { min-height: 0; width: 100%; margin-top: 16px; }
 .note-view { min-height: 0; overflow: auto; padding: clamp(25px, 5vw, 70px); color: #d6d7d1; white-space: pre-wrap; font-size: 15px; line-height: 1.85; }
 .workspace-welcome { min-height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 50px; text-align: center; background-image: linear-gradient(#1e201d 1px, transparent 1px), linear-gradient(90deg, #1e201d 1px, transparent 1px); background-size: 40px 40px; }
 .workspace-welcome h2 { margin: 9px 0; font-size: 38px; }
@@ -238,6 +244,7 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 .snippet-editor .notes { min-height: 60px; }
 .snippet-editor .code-input { min-height: 115px; font: 11px/1.5 var(--mono); }
 .snippet-editor .long-code-input { min-height: 300px; max-height: 48vh; tab-size: 2; }
+.modal-code-editor { height: min(360px, 43vh); margin-top: 2px; }
 .kind-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0 14px; }
 .kind-picker button { padding: 9px; border: 1px solid #444740; background: #151615; color: #8c9087; font-size: 9px; }
 .kind-picker button.active { border-color: var(--lime); background: #2a3022; color: #fff; }
@@ -284,7 +291,8 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 }
 
 .delete-dialog { border-color: #9b6159; }
-.delete-dialog-icon { float: right; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #ff9b8f; background: #7b312b; color: white; box-shadow: 4px 4px 0 #3e1815; font-size: 23px; }
+.delete-dialog-icon { float: right; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 1px solid #ff9b8f; background: #7b312b; color: white; box-shadow: 4px 4px 0 #3e1815; font-size: 23px; }
+.delete-dialog-icon:hover { background: #a4433b; transform: translate(-1px, -1px); box-shadow: 5px 5px 0 #3e1815; }
 .delete-dialog h2 { margin: 9px 50px 8px 0; font-size: 24px; }
 .delete-dialog p { color: #9da097; font-size: 11px; line-height: 1.55; }
 .delete-dialog blockquote { overflow: hidden; margin: 16px 0; padding: 12px; border-left: 3px solid var(--red); background: #120e0d; color: #d7beb9; font: 10px/1.5 var(--mono); white-space: nowrap; text-overflow: ellipsis; }
