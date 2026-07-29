@@ -58,6 +58,7 @@ cd src-tauri
 cargo check
 ```
 
-See [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md) for cross-platform releases,
-download statistics and the recommended private-source/public-community GitHub
-structure. See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing changes.
+See [docs/PROJECT_HANDBOOK.md](docs/PROJECT_HANDBOOK.md) for the complete
+development, GitHub, contribution, build, tagging and release process.
+[docs/DISTRIBUTION.md](docs/DISTRIBUTION.md) contains the shorter distribution
+reference, and contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md).

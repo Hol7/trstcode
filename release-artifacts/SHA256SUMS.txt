@@ -1,1 +1,1 @@
-92c5e5f84bee8de5d35271a4d9067618a10f78e33c70b4c2b29eb887df257d69  trstcode_0.1.0_aarch64.app.zip
+d18156f6f58de005cd7564217d2e2e3e7dc2c5f3ae1f078a94dcbf5c80e24d9e  trstcode_0.1.0_aarch64.app.zip

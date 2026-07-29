@@ -366,7 +366,7 @@ function App() {
     return (
       <main className="onboarding">
         <header className="simple-header">
-          <button className="brand brand-button" onClick={showHome}><span className="brand-mark">›_</span><strong>trstcode</strong></button>
+          <button className="brand brand-button" onClick={showHome}><BrandMark /><strong>trstcode</strong></button>
           <div className="header-tools"><span>{tx("localWorkspace")}</span><ThemeControl theme={theme} onChange={setTheme} tx={tx} /><LocaleControl locale={locale} onChange={changeLocale} tx={tx} /></div>
         </header>
         <section className="onboarding-body">
@@ -406,7 +406,7 @@ function App() {
   return (
     <main className="app-shell with-tabs">
       <header className="titlebar" data-tauri-drag-region>
-        <button className="brand brand-button" onClick={showHome} title={tx("backHome")}><span className="brand-mark">›_</span><strong>trstcode</strong></button>
+        <button className="brand brand-button" onClick={showHome} title={tx("backHome")}><BrandMark /><strong>trstcode</strong></button>
         <div className="active-project-summary"><span className="status-dot" /><span><b>{project.name}</b><small>{shortPath(project.path, tx("workspaceOnlyPath"))}</small></span></div>
         <div className="title-actions"><ThemeControl theme={theme} onChange={setTheme} tx={tx} /><LocaleControl locale={locale} onChange={changeLocale} tx={tx} /><span className="local-badge">{tx("localOnly")}</span>{project.path && <button onClick={() => setSessionKey((key) => key + 1)}>{tx("restartTerminal")}</button>}</div>
       </header>
@@ -646,6 +646,14 @@ function ThemeControl({ theme, onChange, tx }: { theme: Theme; onChange: (theme:
     <button className="theme-control" onClick={() => onChange(next)} title={next === "light" ? tx("lightTheme") : tx("darkTheme")} aria-label={tx("changeTheme")}>
       <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
     </button>
+  );
+}
+
+function BrandMark() {
+  return (
+    <span className="brand-mark" aria-hidden="true">
+      <span>›_</span><span>{"{ }"}</span><span>Aa</span>
+    </span>
   );
 }
 

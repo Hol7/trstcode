@@ -52,7 +52,8 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-button { width: fit-content; padding: 0; border: 0; background: transparent; text-align: left; }
 .brand-button:hover strong { color: var(--lime); }
-.brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #f2f4e9; background: var(--lime); color: #171a11; box-shadow: 3px 3px 0 #596d34; font: 700 12px var(--mono); }
+.brand-mark { width: 58px; height: 30px; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 5px; border: 1px solid #f2f4e9; background: var(--lime); color: #171a11; box-shadow: 3px 3px 0 #596d34; font: 800 7px/1 var(--mono); }
+.brand-mark > span { display: block; white-space: nowrap; }
 .brand strong { letter-spacing: -.4px; }
 .eyebrow { color: var(--muted); font: 10px var(--mono); letter-spacing: 1.35px; }
 .status-dot, .green-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 9px #c7f46488; }
@@ -80,7 +81,7 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 .project-tabs .home-tab, .project-tabs .new-tab { min-width: 42px; width: 42px; justify-content: center; padding: 0; }
 .project-tabs .new-tab { color: var(--lime); }
 
-.workspace { min-height: 0; display: grid; grid-template-columns: minmax(250px, 19vw) minmax(500px, 1fr) minmax(270px, 21vw); }
+.workspace { min-width: 0; min-height: 0; display: grid; grid-template-columns: clamp(220px, 19vw, 300px) minmax(0, 1fr) clamp(230px, 21vw, 330px); overflow: hidden; }
 .panel { min-width: 0; min-height: 0; background: var(--panel); }
 .vault { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 .activity { display: flex; flex-direction: column; border-left: 1px solid var(--line); }
@@ -199,10 +200,10 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 .inspector-actions button { flex: 1; padding: 7px; border: 1px solid #464943; background: transparent; font-size: 9px; }
 .inspector-actions .danger-text { color: #db7770; }
 
-.onboarding { min-height: 100%; background: var(--ink); }
+.onboarding { height: 100%; min-height: 100%; overflow: auto; background: var(--ink); }
 .simple-header { height: 58px; grid-template-columns: 1fr auto; }
 .header-tools { display: flex; align-items: center; gap: 12px; color: #767a72; font: 9px var(--mono); letter-spacing: 1px; }
-.onboarding-body { min-height: calc(100vh - 58px); display: grid; grid-template-columns: minmax(340px, 1.3fr) minmax(270px, .7fr); gap: 20px; align-content: center; padding: clamp(30px, 7vw, 100px); background-image: linear-gradient(#20221f 1px, transparent 1px), linear-gradient(90deg, #20221f 1px, transparent 1px); background-size: 42px 42px; }
+.onboarding-body { min-height: calc(100vh - 58px); display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 20px; align-content: center; padding: clamp(24px, 6vw, 88px); background-image: linear-gradient(#20221f 1px, transparent 1px), linear-gradient(90deg, #20221f 1px, transparent 1px); background-size: 42px 42px; }
 .onboarding-copy { max-width: 650px; padding: 34px; border: 1px solid #3d403a; background: #151615ee; box-shadow: 9px 9px 0 #080908; }
 .onboarding-copy h1 { margin: 12px 0 17px; font-size: clamp(36px, 5vw, 70px); line-height: .98; letter-spacing: -3px; }
 .onboarding-copy h1 em { color: var(--peach); font-style: normal; }
@@ -223,7 +224,7 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 .content-kind > span { display: flex; flex-direction: column; gap: 4px; }
 .content-kind strong { font-size: 12px; }
 .content-kind small { color: #7d8178; font-size: 9px; line-height: 1.4; }
-.recent-projects { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; padding-top: 10px; }
+.recent-projects { grid-column: 1 / -1; min-height: 0; max-height: min(38vh, 430px); display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); align-content: start; gap: 8px; padding: 10px 7px 8px 0; overflow-y: auto; overscroll-behavior: contain; }
 .recent-projects > .eyebrow { grid-column: 1 / -1; margin-bottom: 4px; }
 .recent-projects button { display: grid; grid-template-columns: 25px 1fr auto; align-items: center; gap: 9px; padding: 13px; border: 1px solid #3c3f39; background: #181918; text-align: left; }
 .recent-projects button:hover { border-color: #718050; background: #20221e; }
@@ -359,14 +360,29 @@ body, .app-shell, .onboarding, .panel, .titlebar, .simple-header, .project-tabs,
 ::-webkit-scrollbar-track { background: transparent; }
 
 @media (max-width: 1100px) {
-  .workspace { grid-template-columns: 245px 1fr; }
+  .workspace { grid-template-columns: clamp(210px, 27vw, 255px) minmax(0, 1fr); }
   .activity { display: none; }
+  .titlebar { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .active-project-summary { min-width: 0; overflow: hidden; }
+  .active-project-summary > span:last-child { min-width: 0; }
+  .active-project-summary small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
 @media (max-width: 780px) {
-  .workspace { grid-template-columns: 1fr; }
-  .vault { display: none; }
+  .app-shell.with-tabs { height: 100%; min-height: 0; grid-template-rows: 54px 38px minmax(0, 1fr); }
+  .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 38vh) minmax(360px, 1fr); overflow-y: auto; }
+  .vault { display: flex; border-right: 0; border-bottom: 1px solid var(--line); }
+  .activity { display: none; }
+  .terminal-workspace { min-height: 480px; }
   .titlebar { grid-template-columns: auto 1fr; }
-  .project-switcher { justify-self: end; min-width: 210px; }
+  .active-project-summary { justify-self: end; }
   .title-actions { display: none; }
-  .onboarding-body { grid-template-columns: 1fr; padding: 25px; overflow: auto; }
+  .simple-header { grid-template-columns: 1fr auto; }
+  .header-tools > span { display: none; }
+  .onboarding-body { grid-template-columns: minmax(0, 1fr); align-content: start; padding: 24px; }
+  .onboarding-copy { padding: 25px; }
+  .recent-projects { max-height: none; overflow: visible; }
+  .entry-viewer { padding: 16px; }
+  .entry-viewer > header { flex-direction: column; }
+  .runner-actions { align-items: flex-start; flex-direction: column; }
+  .runner-actions > div { width: 100%; flex-wrap: wrap; }
 }
