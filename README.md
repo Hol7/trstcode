@@ -1,30 +1,46 @@
 # trstcode
 
-Your local command vault and project-aware runner.
+A project-aware command vault with a real persistent terminal.
 
-## First version
+## Current product flow
 
-- Save shell commands and small code snippets
-- Detect common languages automatically
-- Search and favorite saved entries
-- Select a local project folder
-- Run commands inside the selected folder
-- Reuse commands from run history
-- Persist the vault and history locally
+1. Open a local project folder.
+2. Find a saved command or type one in the guided runner.
+3. Review its risk level and active directory.
+4. Run it in the project’s persistent terminal.
+5. Reuse it from history or save it to the vault.
 
-GitHub authentication and repository sync are intentionally planned for a later phase.
+## Included
+
+- Persistent PTY terminal with interactive input and streaming ANSI output
+- Long-running processes, SSH, REPL, and development-server support
+- Project-specific and global saved commands
+- Search, favorites, tags, descriptions, editing, and deletion
+- Clickable per-project command history
+- Shell, SQL, Elixir, Ruby, TypeScript, Python, and JSON detection
+- Basic JSON and SQL formatting
+- Risk warnings for destructive, privileged, deployment, and secret-like commands
+- Local-first storage
+
+GitHub authentication and repository sync are intentionally deferred until the
+local workflow and storage model are production-ready.
 
 ## Development
-
-Install the Tauri prerequisites, including Rust, then:
 
 ```sh
 npm install
 npm run tauri dev
 ```
 
-Build the frontend only:
+Frontend build:
 
 ```sh
 npm run build
+```
+
+Native compile check:
+
+```sh
+cd src-tauri
+cargo check
 ```
