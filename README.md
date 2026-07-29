@@ -1,20 +1,24 @@
 # trstcode
 
-A project-aware command vault with a real persistent terminal.
+A local developer workspace for commands, code, scripts, notes, and real terminal sessions.
 
 ## Current product flow
 
-1. Open a local project folder.
-2. Find a saved command or type one in the guided runner.
-3. Review its risk level and active directory.
-4. Run it in the project’s persistent terminal.
-5. Reuse it from history or save it to the vault.
+1. Create an empty workspace or open a local project folder.
+2. Save commands, long code/scripts, or plain notes.
+3. Navigate between open workspaces using project tabs.
+4. Read code with Shiki syntax highlighting.
+5. In folder-backed projects, review and run commands in a persistent terminal.
 
 ## Included
 
 - Persistent PTY terminal with interactive input and streaming ANSI output
 - Long-running processes, SSH, REPL, and development-server support
-- Project-specific and global saved commands
+- Folder-backed projects and folder-free organizational workspaces
+- Navigable tabs for multiple open projects
+- Commands, long code/scripts, and notes as separate entry types
+- Shiki syntax highlighting with explicit language selection
+- Project-specific and global entries
 - Search, favorites, tags, descriptions, editing, and deletion
 - Clickable per-project command history
 - Shell, SQL, Elixir, Ruby, TypeScript, Python, and JSON detection

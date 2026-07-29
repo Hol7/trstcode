@@ -1,13 +1,17 @@
 import { FormEvent, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import ShikiViewer from "./ShikiViewer";
 import TerminalPane from "./TerminalPane";
 import "./App.css";
 
 type Scope = "global" | "project";
-type Snippet = {
+type EntryKind = "command" | "code" | "note";
+type Project = { id: string; name: string; path?: string; createdAt: number };
+type Entry = {
   id: string;
+  kind: EntryKind;
   title: string;
-  command: string;
+  content: string;
   language: string;
   project: string;
   scope: Scope;
@@ -19,49 +23,54 @@ type Snippet = {
 type Run = {
   id: string;
   command: string;
-  directory: string;
+  projectId: string;
   source: "vault" | "terminal";
   ranAt: number;
 };
 type Risk = { level: "safe" | "careful" | "danger"; reasons: string[] };
 
-const seedSnippets: Snippet[] = [
+const now = Date.now();
+const seeds: Entry[] = [
   {
-    id: "seed-1",
+    id: "seed-command",
+    kind: "command",
     title: "Start development server",
-    command: "npm run dev",
+    content: "npm run dev",
     language: "shell",
     project: "",
     scope: "global",
     description: "Start the current application in development mode.",
     tags: ["dev", "npm"],
     favorite: true,
-    createdAt: Date.now() - 1000,
+    createdAt: now - 1000,
   },
   {
-    id: "seed-2",
-    title: "Inspect repository status",
-    command: "git status --short --branch",
-    language: "shell",
+    id: "seed-code",
+    kind: "code",
+    title: "Elixir changeset helper",
+    content:
+      "def changeset(user, attrs) do\n  user\n  |> cast(attrs, [:email, :name])\n  |> validate_required([:email])\n  |> unique_constraint(:email)\nend",
+    language: "elixir",
     project: "",
     scope: "global",
-    description: "Show the active branch and a compact list of changes.",
-    tags: ["git", "check"],
-    favorite: true,
-    createdAt: Date.now() - 2000,
-  },
-  {
-    id: "seed-3",
-    title: "Find slow PostgreSQL queries",
-    command:
-      "SELECT query, calls, mean_exec_time\nFROM pg_stat_statements\nORDER BY mean_exec_time DESC\nLIMIT 10;",
-    language: "sql",
-    project: "",
-    scope: "global",
-    description: "Review the ten queries with the highest average execution time.",
-    tags: ["postgres", "diagnostic"],
+    description: "A reusable Ecto changeset pattern.",
+    tags: ["elixir", "ecto"],
     favorite: false,
-    createdAt: Date.now() - 3000,
+    createdAt: now - 2000,
+  },
+  {
+    id: "seed-note",
+    kind: "note",
+    title: "Production deploy reminder",
+    content:
+      "Before deploying:\n\n• Check pending migrations\n• Confirm the active branch\n• Read the release notes\n• Keep the rollback command nearby",
+    language: "text",
+    project: "",
+    scope: "global",
+    description: "Things worth checking before a production release.",
+    tags: ["deploy", "checklist"],
+    favorite: false,
+    createdAt: now - 3000,
   },
 ];
 
@@ -79,22 +88,54 @@ const store = {
   },
 };
 
+function loadEntries(): Entry[] {
+  const current = store.read<Entry[]>("trstcode.entries.v3", []);
+  if (current.length) return current;
+  const previous = store.read<Array<Record<string, unknown>>>("trstcode.snippets.v2", []);
+  if (!previous.length) return seeds;
+  return previous.map((item) => ({
+    id: String(item.id),
+    kind: "command",
+    title: String(item.title || "Untitled command"),
+    content: String(item.command || ""),
+    language: String(item.language || "text"),
+    project: item.scope === "project" && item.project
+      ? `folder:${String(item.project)}`
+      : "",
+    scope: item.scope === "project" ? "project" : "global",
+    description: String(item.description || ""),
+    tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
+    favorite: Boolean(item.favorite),
+    createdAt: Number(item.createdAt || Date.now()),
+  }));
+}
+
+function loadProjects(): Project[] {
+  const current = store.read<Project[]>("trstcode.workspaces.v2", []);
+  if (current.length) return current;
+  return store.read<string[]>("trstcode.projects", []).map((path) => ({
+    id: `folder:${path}`,
+    name: folderName(path),
+    path,
+    createdAt: Date.now(),
+  }));
+}
+
 function detectLanguage(value: string) {
   const code = value.trim().toLowerCase();
-  if (/^(select|insert|update|delete|alter|drop|create table|with)\b/.test(code))
-    return "sql";
-  if (/\b(defmodule|mix |iex|ecto|IO\.|Repo\.)\b/i.test(value)) return "elixir";
+  if (/^(select|insert|update|delete|alter|drop|create table|with)\b/.test(code)) return "sql";
+  if (/\b(defmodule|defp? |mix |iex|ecto|IO\.|Repo\.)\b/i.test(value)) return "elixir";
+  if (/\b(fn |const |let |interface |console\.log|=>|import .* from)\b/.test(code)) return "typescript";
   if (/\b(def |puts |bundle exec|rails )/.test(code)) return "ruby";
-  if (/\b(const |let |interface |console\.log|=>)/.test(code)) return "typescript";
   if (/\b(import |from |print\(|pip |python)/.test(code)) return "python";
-  if (/^(ssh|sudo|docker|git|cd|ls|curl|chmod|systemctl|npm|pnpm|yarn)\b/.test(code))
-    return "shell";
-  if ((code.startsWith("{") && code.endsWith("}")) || code.startsWith("["))
-    return "json";
+  if (/^(ssh|sudo|docker|git|cd|ls|curl|chmod|systemctl|npm|pnpm|yarn)\b/.test(code)) return "shell";
+  if ((code.startsWith("{") && code.endsWith("}")) || code.startsWith("[")) return "json";
+  if (/<\/?[a-z][\s\S]*>/i.test(value)) return "html";
   return "text";
 }
 
-function formatSnippet(value: string, language: string) {
+function formatContent(value: string, language: string, kind: EntryKind) {
+  if (kind === "note") return value.trim();
   const trimmed = value.trim();
   if (language === "json") {
     try {
@@ -106,10 +147,7 @@ function formatSnippet(value: string, language: string) {
   if (language === "sql") {
     return trimmed
       .replace(/\s+(FROM|WHERE|ORDER BY|GROUP BY|LIMIT|VALUES|SET)\s+/gi, "\n$1 ")
-      .replace(/\s+(LEFT JOIN|RIGHT JOIN|INNER JOIN|JOIN)\s+/gi, "\n$1 ")
-      .replace(/\b(select|from|where|order by|group by|limit|join|as)\b/gi, (word) =>
-        word.toUpperCase(),
-      );
+      .replace(/\b(select|from|where|order by|group by|limit|join|as)\b/gi, (word) => word.toUpperCase());
   }
   return trimmed;
 }
@@ -117,359 +155,342 @@ function formatSnippet(value: string, language: string) {
 function assessRisk(command: string): Risk {
   const reasons: string[] = [];
   const normalized = command.toLowerCase();
-  if (/\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b/.test(normalized))
-    reasons.push("Recursively deletes files");
-  if (/\b(drop\s+(table|database)|truncate\s+table)\b/.test(normalized))
-    reasons.push("Destroys database data");
-  if (/\b(delete\s+from)\b/.test(normalized) && !/\bwhere\b/.test(normalized))
-    reasons.push("Deletes every matching database row");
-  if (/\b(sudo|shutdown|reboot|mkfs|dd\s+if=)\b/.test(normalized))
-    reasons.push("Uses elevated or system-level operations");
-  if (/(token|password|secret|api[_-]?key)\s*[=:]\s*\S+/i.test(command))
-    reasons.push("May contain a secret");
+  if (/\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b/.test(normalized)) reasons.push("Recursively deletes files");
+  if (/\b(drop\s+(table|database)|truncate\s+table)\b/.test(normalized)) reasons.push("Destroys database data");
+  if (/\b(delete\s+from)\b/.test(normalized) && !/\bwhere\b/.test(normalized)) reasons.push("Deletes every matching database row");
+  if (/\b(sudo|shutdown|reboot|mkfs|dd\s+if=)\b/.test(normalized)) reasons.push("Uses elevated or system-level operations");
+  if (/(token|password|secret|api[_-]?key)\s*[=:]\s*\S+/i.test(command)) reasons.push("May contain a secret");
   if (reasons.length) return { level: "danger", reasons };
   if (/\b(deploy|migrate|ssh|kubectl|terraform apply|git push)\b/.test(normalized))
     return { level: "careful", reasons: ["May change a remote or shared environment"] };
   return { level: "safe", reasons: [] };
 }
 
-function projectName(path: string) {
+function folderName(path: string) {
   return path.split("/").filter(Boolean).pop() || "Project";
 }
-
-function shortPath(path: string) {
+function shortPath(path?: string) {
+  if (!path) return "Workspace only";
   const parts = path.split("/").filter(Boolean);
   return parts.length > 3 ? `…/${parts.slice(-2).join("/")}` : path;
 }
 
 const languageLabel: Record<string, string> = {
   shell: "$", sql: "SQL", ruby: "RB", elixir: "EX", typescript: "TS",
-  python: "PY", json: "{}", text: "TXT",
+  javascript: "JS", python: "PY", json: "{}", text: "TXT", html: "<>", css: "CSS",
+  rust: "RS", go: "GO", php: "PHP", yaml: "YML",
 };
+const kindLabel: Record<EntryKind, string> = { command: "Command", code: "Code", note: "Note" };
 
 function App() {
-  const [snippets, setSnippets] = useState<Snippet[]>(() =>
-    store.read("trstcode.snippets.v2", seedSnippets),
-  );
-  const [runs, setRuns] = useState<Run[]>(() => store.read("trstcode.runs.v2", []));
-  const [recentProjects, setRecentProjects] = useState<string[]>(() =>
-    store.read("trstcode.projects", []),
-  );
-  const [projectPath, setProjectPath] = useState("");
+  const [entries, setEntries] = useState<Entry[]>(loadEntries);
+  const [projects, setProjects] = useState<Project[]>(loadProjects);
+  const [openedIds, setOpenedIds] = useState<string[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState("");
+  const [runs, setRuns] = useState<Run[]>(() => store.read("trstcode.runs.v3", []));
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "starred" | "project">("all");
+  const [filter, setFilter] = useState<"all" | EntryKind | "starred">("all");
   const [activeId, setActiveId] = useState("");
   const [command, setCommand] = useState("");
   const [sessionKey, setSessionKey] = useState(0);
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editing, setEditing] = useState<Snippet | null>(null);
+  const [editing, setEditing] = useState<Entry | null>(null);
+  const [projectCreator, setProjectCreator] = useState(false);
   const [riskCommand, setRiskCommand] = useState("");
   const sendRef = useRef<(command: string) => Promise<void>>(async () => undefined);
 
-  const currentProject = projectName(projectPath);
-  const active = snippets.find((item) => item.id === activeId);
+  const project = projects.find((item) => item.id === activeProjectId);
+  const active = entries.find((item) => item.id === activeId);
+  const openedProjects = openedIds.map((id) => projects.find((item) => item.id === id)).filter(Boolean) as Project[];
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
-    return snippets
+    return entries
       .filter((item) => filter !== "starred" || item.favorite)
-      .filter((item) => filter !== "project" || item.project === projectPath)
-      .filter((item) => item.scope === "global" || item.project === projectPath)
-      .filter((item) =>
-        [item.title, item.command, item.description, ...item.tags]
-          .join(" ")
-          .toLowerCase()
-          .includes(term),
-      );
-  }, [filter, projectPath, query, snippets]);
+      .filter((item) => !["command", "code", "note"].includes(filter) || item.kind === filter)
+      .filter((item) => item.scope === "global" || item.project === activeProjectId)
+      .filter((item) => [item.title, item.content, item.description, ...item.tags].join(" ").toLowerCase().includes(term));
+  }, [activeProjectId, entries, filter, query]);
 
-  function persistSnippets(next: Snippet[]) {
-    setSnippets(next);
-    store.write("trstcode.snippets.v2", next);
+  function persistEntries(next: Entry[]) {
+    setEntries(next);
+    store.write("trstcode.entries.v3", next);
   }
-  function persistRuns(next: Run[]) {
-    const limited = next.slice(0, 150);
-    setRuns(limited);
-    store.write("trstcode.runs.v2", limited);
+  function persistProjects(next: Project[]) {
+    setProjects(next);
+    store.write("trstcode.workspaces.v2", next);
   }
-
   function prependRun(run: Run) {
     setRuns((current) => {
       const next = [run, ...current].slice(0, 150);
-      store.write("trstcode.runs.v2", next);
+      store.write("trstcode.runs.v3", next);
       return next;
     });
   }
-
-  async function chooseProject() {
+  function showHome() {
+    setActiveProjectId("");
+    setActiveId("");
+    setCommand("");
+  }
+  function activateProject(next: Project) {
+    if (!openedIds.includes(next.id)) setOpenedIds((current) => [...current, next.id]);
+    setActiveProjectId(next.id);
+    setActiveId("");
+    setCommand("");
+  }
+  function addProject(next: Project) {
+    const existing = projects.find((item) => item.id === next.id);
+    const list = existing ? projects : [next, ...projects];
+    persistProjects(list);
+    activateProject(existing || next);
+    setProjectCreator(false);
+  }
+  async function chooseFolder() {
     if (!("__TAURI_INTERNALS__" in window)) {
       const manual = window.prompt("Project folder path");
-      if (manual) openProject(manual);
+      if (manual) addProject({ id: `folder:${manual}`, name: folderName(manual), path: manual, createdAt: Date.now() });
       return;
     }
-    try {
-      const selected = await open({ directory: true, multiple: false });
-      if (typeof selected !== "string") return;
-      openProject(selected);
-    } catch {
-      const manual = window.prompt("Project folder path");
-      if (manual) openProject(manual);
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === "string") addProject({ id: `folder:${selected}`, name: folderName(selected), path: selected, createdAt: Date.now() });
+  }
+  function closeTab(id: string) {
+    const next = openedIds.filter((item) => item !== id);
+    setOpenedIds(next);
+    if (activeProjectId === id) {
+      const replacement = projects.find((item) => item.id === next[next.length - 1]);
+      if (replacement) activateProject(replacement);
+      else showHome();
     }
   }
-
-  function openProject(path: string) {
-    setProjectPath(path);
-    setCommand("");
-    setActiveId("");
-    const next = [path, ...recentProjects.filter((item) => item !== path)].slice(0, 8);
-    setRecentProjects(next);
-    store.write("trstcode.projects", next);
-  }
-
   async function execute(value = command) {
+    if (!project?.path) return;
     const cleaned = value.trim();
     if (!cleaned) return;
     const risk = assessRisk(cleaned);
-    if (risk.level !== "safe") {
-      setRiskCommand(cleaned);
-      return;
-    }
-    await runApproved(cleaned, active ? "vault" : "terminal");
+    if (risk.level !== "safe") return setRiskCommand(cleaned);
+    await runApproved(cleaned);
   }
-
-  async function runApproved(value: string, source: Run["source"]) {
+  async function runApproved(value: string) {
     await sendRef.current(value);
-    prependRun({
-      id: crypto.randomUUID(),
-      command: value,
-      directory: projectPath,
-      source,
-      ranAt: Date.now(),
-    });
+    prependRun({ id: crypto.randomUUID(), command: value, projectId: activeProjectId, source: active?.kind === "command" ? "vault" : "terminal", ranAt: Date.now() });
     setRiskCommand("");
   }
-
   function recordTerminalCommand(value: string) {
-    prependRun({
-      id: crypto.randomUUID(),
-      command: value,
-      directory: projectPath,
-      source: "terminal",
-      ranAt: Date.now(),
-    });
+    prependRun({ id: crypto.randomUUID(), command: value, projectId: activeProjectId, source: "terminal", ranAt: Date.now() });
   }
-
-  function openCreate(prefill = command) {
+  function openCreate(kind: EntryKind = "command", prefill = "") {
     setEditing({
       id: "",
+      kind,
       title: "",
-      command: prefill,
-      language: detectLanguage(prefill),
-      project: projectPath,
-      scope: projectPath ? "project" : "global",
+      content: prefill,
+      language: kind === "note" ? "text" : detectLanguage(prefill),
+      project: activeProjectId,
+      scope: "project",
       description: "",
       tags: [],
       favorite: false,
       createdAt: Date.now(),
     });
-    setEditorOpen(true);
   }
-
-  function saveSnippet(snippet: Snippet) {
-    const formatted = formatSnippet(snippet.command, snippet.language);
-    const completed = { ...snippet, command: formatted };
-    const next = snippet.id
-      ? snippets.map((item) => (item.id === snippet.id ? completed : item))
-      : [{ ...completed, id: crypto.randomUUID() }, ...snippets];
-    persistSnippets(next);
-    setEditorOpen(false);
+  function saveEntry(entry: Entry) {
+    const completed = { ...entry, content: formatContent(entry.content, entry.language, entry.kind) };
+    const saved = entry.id ? completed : { ...completed, id: crypto.randomUUID() };
+    const next = entry.id
+      ? entries.map((item) => item.id === entry.id ? saved : item)
+      : [saved, ...entries];
+    persistEntries(next);
+    setActiveId(saved.id);
+    setCommand(saved.kind === "command" ? saved.content : "");
     setEditing(null);
   }
-
-  function deleteSnippet(id: string) {
-    if (!window.confirm("Delete this saved command? This cannot be undone.")) return;
-    persistSnippets(snippets.filter((item) => item.id !== id));
+  function selectEntry(entry: Entry) {
+    setActiveId(entry.id);
+    setCommand(entry.kind === "command" ? entry.content : "");
+  }
+  function deleteEntry(id: string) {
+    if (!window.confirm("Delete this entry? This cannot be undone.")) return;
+    persistEntries(entries.filter((item) => item.id !== id));
     setActiveId("");
     setCommand("");
   }
 
-  if (!projectPath) {
+  if (!project) {
     return (
       <main className="onboarding">
         <header className="simple-header">
-          <div className="brand"><span className="brand-mark">›_</span><strong>trstcode</strong></div>
-          <span>local command workspace</span>
+          <button className="brand brand-button" onClick={showHome}><span className="brand-mark">›_</span><strong>trstcode</strong></button>
+          <span>local developer workspace</span>
         </header>
         <section className="onboarding-body">
           <div className="onboarding-copy">
             <span className="eyebrow">START HERE</span>
-            <h1>Open a project.<br /><em>Keep the commands that matter.</em></h1>
-            <p>trstcode gives each project a real terminal, a reusable command vault, and a history you can return to.</p>
-            <button className="open-project" onClick={chooseProject}>Open project folder <b>→</b></button>
+            <h1>Keep what matters.<br /><em>Run it when needed.</em></h1>
+            <p>Create a simple workspace for notes and code, or connect a local folder when you also need a real terminal.</p>
+            <div className="home-actions">
+              <button className="open-project" onClick={chooseFolder}>Open project folder <b>→</b></button>
+              <button className="workspace-only-button" onClick={() => setProjectCreator(true)}>New empty workspace</button>
+            </div>
           </div>
           <div className="flow-card">
-            <span className="eyebrow">THE FLOW</span>
-            {["Choose a project", "Find or type a command", "Review and run", "Save it for later"].map((step, index) => (
-              <div className="flow-step" key={step}><b>0{index + 1}</b><span>{step}</span>{index < 3 && <i>↓</i>}</div>
+            <span className="eyebrow">YOU CAN KEEP</span>
+            {[["›_", "Commands", "Run them in folder-backed projects"], ["{ }", "Code & scripts", "Read 100+ lines with syntax highlighting"], ["Aa", "Notes", "Save ideas, reminders and words"]].map(([icon, title, text]) => (
+              <div className="content-kind" key={title}><b>{icon}</b><span><strong>{title}</strong><small>{text}</small></span></div>
             ))}
           </div>
-          {recentProjects.length > 0 && (
+          {projects.length > 0 && (
             <div className="recent-projects">
-              <span className="eyebrow">RECENT PROJECTS</span>
-              {recentProjects.map((path) => (
-                <button key={path} onClick={() => openProject(path)}>
-                  <span className="folder-icon">▰</span>
-                  <span><strong>{projectName(path)}</strong><small>{shortPath(path)}</small></span>
-                  <b>→</b>
+              <span className="eyebrow">YOUR WORKSPACES</span>
+              {projects.map((item) => (
+                <button key={item.id} onClick={() => activateProject(item)}>
+                  <span className="folder-icon">{item.path ? "▰" : "◇"}</span>
+                  <span><strong>{item.name}</strong><small>{shortPath(item.path)}</small></span><b>→</b>
                 </button>
               ))}
             </div>
           )}
         </section>
+        {projectCreator && <ProjectCreator onClose={() => setProjectCreator(false)} onCreate={(name) => addProject({ id: crypto.randomUUID(), name, createdAt: Date.now() })} />}
       </main>
     );
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell with-tabs">
       <header className="titlebar" data-tauri-drag-region>
-        <div className="brand"><span className="brand-mark">›_</span><strong>trstcode</strong></div>
-        <button className="project-switcher" onClick={chooseProject}>
-          <span className="status-dot" />
-          <span><b>{currentProject}</b><small>{shortPath(projectPath)}</small></span>
-          <i>⌄</i>
-        </button>
-        <div className="title-actions">
-          <span className="local-badge">LOCAL ONLY</span>
-          <button onClick={() => setSessionKey((key) => key + 1)}>Restart terminal</button>
-        </div>
+        <button className="brand brand-button" onClick={showHome} title="Back to home"><span className="brand-mark">›_</span><strong>trstcode</strong></button>
+        <div className="active-project-summary"><span className="status-dot" /><span><b>{project.name}</b><small>{shortPath(project.path)}</small></span></div>
+        <div className="title-actions"><span className="local-badge">LOCAL ONLY</span>{project.path && <button onClick={() => setSessionKey((key) => key + 1)}>Restart terminal</button>}</div>
       </header>
+      <nav className="project-tabs" aria-label="Open projects">
+        <button className="home-tab" onClick={showHome} title="Home">⌂</button>
+        {openedProjects.map((item) => (
+          <button key={item.id} className={item.id === activeProjectId ? "active" : ""} onClick={() => activateProject(item)}>
+            <span>{item.path ? "▰" : "◇"}</span>{item.name}
+            <i onClick={(event) => { event.stopPropagation(); closeTab(item.id); }}>×</i>
+          </button>
+        ))}
+        <button className="new-tab" onClick={() => setProjectCreator(true)} title="New workspace">＋</button>
+      </nav>
 
       <section className="workspace">
         <aside className="vault panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">COMMAND VAULT</span><h2>{currentProject}</h2></div>
-            <button className="square-button" onClick={() => openCreate()}>+</button>
-          </div>
-          <label className="search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search commands…" /></label>
-          <div className="filters">
-            <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>All</button>
-            <button className={filter === "project" ? "active" : ""} onClick={() => setFilter("project")}>Project</button>
-            <button className={filter === "starred" ? "active" : ""} onClick={() => setFilter("starred")}>Starred</button>
+          <div className="panel-heading"><div><span className="eyebrow">YOUR LIBRARY</span><h2>{project.name}</h2></div><button className="square-button" onClick={() => openCreate("command")}>+</button></div>
+          <label className="search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search commands, code, notes…" /></label>
+          <div className="filters entry-filters">
+            {(["all", "command", "code", "note", "starred"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "All" : value === "starred" ? "★" : kindLabel[value]}</button>)}
           </div>
           <div className="snippet-list">
-            {filtered.map((snippet) => (
-              <button
-                key={snippet.id}
-                className={`snippet ${activeId === snippet.id ? "selected" : ""}`}
-                onClick={() => { setActiveId(snippet.id); setCommand(snippet.command); }}
-              >
-                <span className="lang">{languageLabel[snippet.language] || "TXT"}</span>
-                <span><strong>{snippet.title}</strong><code>{snippet.command.replace(/\n/g, " ")}</code><small>{snippet.scope === "global" ? "Global" : currentProject} · {snippet.tags.join(" · ")}</small></span>
-                <i className={snippet.favorite ? "on" : ""} onClick={(e) => { e.stopPropagation(); persistSnippets(snippets.map((item) => item.id === snippet.id ? { ...item, favorite: !item.favorite } : item)); }}>★</i>
+            {filtered.map((entry) => (
+              <button key={entry.id} aria-label={entry.title} className={`snippet ${activeId === entry.id ? "selected" : ""}`} onClick={() => selectEntry(entry)}>
+                <span className={`lang kind-${entry.kind}`}>{entry.kind === "note" ? "Aa" : languageLabel[entry.language] || "TXT"}</span>
+                <span><strong>{entry.title}</strong><code>{entry.content.replace(/\n/g, " ")}</code><small>{kindLabel[entry.kind]} · {entry.scope === "global" ? "Global" : project.name}</small></span>
+                <i className={entry.favorite ? "on" : ""} onClick={(e) => { e.stopPropagation(); persistEntries(entries.map((item) => item.id === entry.id ? { ...item, favorite: !item.favorite } : item)); }}>★</i>
               </button>
             ))}
-            {filtered.length === 0 && <div className="list-empty">No commands match this view.</div>}
+            {!filtered.length && <div className="list-empty">Nothing here yet.</div>}
           </div>
-          <button className="save-command" onClick={() => openCreate()}>＋ Save a command</button>
+          <div className="create-entry-bar">
+            <button onClick={() => openCreate("command")}>›_ Command</button>
+            <button onClick={() => openCreate("code")}>{"{ }"} Code</button>
+            <button onClick={() => openCreate("note")}>Aa Note</button>
+          </div>
         </aside>
 
-        <section className="terminal-workspace panel">
-          <div className="workspace-header">
-            <div><span className="green-dot" /><b>Terminal</b><small>{shortPath(projectPath)}</small></div>
-            <span>zsh · persistent session</span>
-          </div>
-          <div className="guided-runner">
-            <div className="runner-topline">
-              <span className="eyebrow">{active ? `FROM VAULT / ${active.title}` : "GUIDED RUN"}</span>
-              <span className={`risk-pill ${assessRisk(command).level}`}>{assessRisk(command).level}</span>
-            </div>
-            <textarea value={command} onChange={(e) => { setCommand(e.target.value); if (active && e.target.value !== active.command) setActiveId(""); }} placeholder="Paste a command here, or use the terminal directly below…" spellCheck={false} />
-            <div className="runner-actions">
-              <span>{languageLabel[detectLanguage(command)] || "TXT"} · Review the command and active folder before running.</span>
-              <div>
-                {command.trim() && !active && <button onClick={() => openCreate(command)}>Save</button>}
-                {active && <button onClick={() => { setEditing(active); setEditorOpen(true); }}>Edit</button>}
-                <button className="run-button" onClick={() => execute()}>Run in {currentProject} ↵</button>
+        <section className={`terminal-workspace panel ${active && active.kind !== "command" ? "viewing-entry" : !project.path ? "workspace-only" : ""}`}>
+          {active?.kind === "code" && <EntryViewer entry={active} onEdit={() => setEditing(active)} onCopy={() => navigator.clipboard.writeText(active.content)} />}
+          {active?.kind === "note" && <EntryViewer entry={active} onEdit={() => setEditing(active)} onCopy={() => navigator.clipboard.writeText(active.content)} />}
+          {(!active || active.kind === "command") && project.path && (
+            <>
+              <div className="workspace-header"><div><span className="green-dot" /><b>Terminal</b><small>{shortPath(project.path)}</small></div><span>zsh · persistent session</span></div>
+              <div className="guided-runner">
+                <div className="runner-topline"><span className="eyebrow">{active ? `COMMAND / ${active.title}` : "GUIDED RUN"}</span><span className={`risk-pill ${assessRisk(command).level}`}>{assessRisk(command).level}</span></div>
+                <textarea value={command} onChange={(e) => { setCommand(e.target.value); if (active && e.target.value !== active.content) setActiveId(""); }} placeholder="Paste a command here, or use the terminal directly below…" spellCheck={false} />
+                <div className="runner-actions"><span>{languageLabel[detectLanguage(command)] || "TXT"} · Review before running.</span><div>{command.trim() && !active && <button onClick={() => openCreate("command", command)}>Save</button>}{active && <button onClick={() => setEditing(active)}>Edit</button>}<button className="run-button" onClick={() => execute()}>Run in {project.name} ↵</button></div></div>
               </div>
+              <div className="terminal-label"><span>LIVE TERMINAL</span><span>Click below to type directly</span></div>
+              <TerminalPane directory={project.path} sessionKey={sessionKey} onCommand={recordTerminalCommand} onReady={(send) => { sendRef.current = send; }} />
+            </>
+          )}
+          {!active && !project.path && (
+            <div className="workspace-welcome">
+              <span className="eyebrow">WORKSPACE ONLY</span><h2>{project.name}</h2>
+              <p>This workspace does not need a folder. Save code, scripts, notes, words and reusable commands here.</p>
+              <div><button onClick={() => openCreate("code")}>Add code or script</button><button onClick={() => openCreate("note")}>Write a note</button><button onClick={chooseFolder}>Open a folder-backed project</button></div>
             </div>
-          </div>
-          <div className="terminal-label"><span>LIVE TERMINAL</span><span>Click below to type directly</span></div>
-          <TerminalPane
-            directory={projectPath}
-            sessionKey={sessionKey}
-            onCommand={recordTerminalCommand}
-            onReady={(send) => { sendRef.current = send; }}
-          />
+          )}
         </section>
 
         <aside className="activity panel">
-          <div className="panel-heading compact"><div><span className="eyebrow">ACTIVITY</span><h2>Command history</h2></div><button className="text-button" onClick={() => persistRuns([])}>Clear</button></div>
-          <div className="history-list">
-            {runs.filter((run) => run.directory === projectPath).map((run) => (
-              <button key={run.id} className="history-item" onClick={() => { setCommand(run.command); setActiveId(""); }}>
-                <span className="history-arrow">↳</span>
-                <span><code>{run.command}</code><small>{new Date(run.ranAt).toLocaleString([], { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" })} · {run.source}</small></span>
-                <b>＋</b>
-              </button>
-            ))}
-            {!runs.some((run) => run.directory === projectPath) && <div className="empty-history"><span>↯</span><strong>No commands yet</strong><p>Run something in the guided field or directly in the terminal. It will appear here.</p></div>}
-          </div>
-          {active && (
-            <div className="command-inspector">
-              <span className="eyebrow">SELECTED COMMAND</span>
-              <h3>{active.title}</h3>
-              <p>{active.description || "No usage notes yet."}</p>
+          <div className="panel-heading compact"><div><span className="eyebrow">{active ? "SELECTED" : "ACTIVITY"}</span><h2>{active ? kindLabel[active.kind] : "Command history"}</h2></div></div>
+          {active ? (
+            <div className="entry-inspector">
+              <span className={`entry-kind-badge ${active.kind}`}>{kindLabel[active.kind]}</span><h3>{active.title}</h3>
+              <p>{active.description || "No description yet."}</p>
+              <dl><div><dt>Language</dt><dd>{active.kind === "note" ? "Plain text" : active.language}</dd></div><div><dt>Length</dt><dd>{active.content.split("\n").length} lines</dd></div><div><dt>Scope</dt><dd>{active.scope === "global" ? "Every workspace" : project.name}</dd></div></dl>
               <div className="tag-row">{active.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
-              <div className="inspector-actions">
-                <button onClick={() => navigator.clipboard.writeText(active.command)}>Copy</button>
-                <button onClick={() => { setEditing(active); setEditorOpen(true); }}>Edit</button>
-                <button className="danger-text" onClick={() => deleteSnippet(active.id)}>Delete</button>
-              </div>
+              <div className="inspector-actions"><button onClick={() => navigator.clipboard.writeText(active.content)}>Copy</button><button onClick={() => setEditing(active)}>Edit</button><button className="danger-text" onClick={() => deleteEntry(active.id)}>Delete</button></div>
             </div>
-          )}
+          ) : project.path ? (
+            <div className="history-list">{runs.filter((run) => run.projectId === project.id).map((run) => <button key={run.id} className="history-item" onClick={() => { setCommand(run.command); setActiveId(""); }}><span className="history-arrow">↳</span><span><code>{run.command}</code><small>{new Date(run.ranAt).toLocaleString()}</small></span><b>＋</b></button>)}</div>
+          ) : <div className="empty-history"><span>◇</span><strong>Your quiet workspace</strong><p>Select an entry to inspect it, or create your first note or code snippet.</p></div>}
         </aside>
       </section>
 
-      {editorOpen && editing && <SnippetEditor initial={editing} projectName={currentProject} onClose={() => setEditorOpen(false)} onSave={saveSnippet} />}
-
-      {riskCommand && (
-        <div className="modal-backdrop">
-          <div className="risk-dialog">
-            <span className="risk-icon">!</span>
-            <span className="eyebrow">REVIEW BEFORE RUNNING</span>
-            <h2>{assessRisk(riskCommand).level === "danger" ? "This command may be destructive" : "This command may affect another environment"}</h2>
-            <p>It will run inside <b>{projectPath}</b>.</p>
-            <pre>{riskCommand}</pre>
-            <ul>{assessRisk(riskCommand).reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
-            <div className="dialog-actions"><button onClick={() => setRiskCommand("")}>Cancel</button><button className="danger-button" onClick={() => runApproved(riskCommand, active ? "vault" : "terminal")}>I understand — run it</button></div>
-          </div>
-        </div>
-      )}
+      {editing && <EntryEditor initial={editing} project={project} onClose={() => setEditing(null)} onSave={saveEntry} />}
+      {projectCreator && <ProjectCreator onClose={() => setProjectCreator(false)} onCreate={(name) => addProject({ id: crypto.randomUUID(), name, createdAt: Date.now() })} onFolder={chooseFolder} />}
+      {riskCommand && <div className="modal-backdrop"><div className="risk-dialog"><span className="risk-icon">!</span><span className="eyebrow">REVIEW BEFORE RUNNING</span><h2>This command needs your attention</h2><p>It will run inside <b>{project.path}</b>.</p><pre>{riskCommand}</pre><ul>{assessRisk(riskCommand).reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><div className="dialog-actions"><button onClick={() => setRiskCommand("")}>Cancel</button><button className="danger-button" onClick={() => runApproved(riskCommand)}>I understand — run it</button></div></div></div>}
     </main>
   );
 }
 
-function SnippetEditor({ initial, projectName, onClose, onSave }: { initial: Snippet; projectName: string; onClose: () => void; onSave: (snippet: Snippet) => void }) {
+function EntryViewer({ entry, onEdit, onCopy }: { entry: Entry; onEdit: () => void; onCopy: () => void }) {
+  return (
+    <div className={`entry-viewer ${entry.kind}`}>
+      <header><div><span className="eyebrow">{kindLabel[entry.kind]} / {entry.kind === "note" ? "PLAIN TEXT" : entry.language.toUpperCase()}</span><h1>{entry.title}</h1><p>{entry.description}</p></div><div><button onClick={onCopy}>Copy</button><button onClick={onEdit}>Edit</button></div></header>
+      {entry.kind === "code" ? <ShikiViewer code={entry.content} language={entry.language} /> : <article className="note-view">{entry.content}</article>}
+      <footer><span>{entry.content.split("\n").length} lines</span><span>{entry.content.length} characters</span></footer>
+    </div>
+  );
+}
+
+function EntryEditor({ initial, project, onClose, onSave }: { initial: Entry; project: Project; onClose: () => void; onSave: (entry: Entry) => void }) {
   const [value, setValue] = useState(initial);
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!value.title.trim() || !value.command.trim()) return;
-    onSave({ ...value, language: value.language || detectLanguage(value.command), tags: value.tags.filter(Boolean) });
+    if (!value.title.trim() || !value.content.trim()) return;
+    onSave({ ...value, language: value.kind === "note" ? "text" : value.language || detectLanguage(value.content), tags: value.tags.filter(Boolean) });
   }
+  const codeLike = value.kind !== "note";
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <form className="snippet-editor" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-heading"><div><span className="eyebrow">{value.id ? "EDIT COMMAND" : "NEW COMMAND"}</span><h2>{value.id ? value.title : "Save to your vault"}</h2></div><button type="button" onClick={onClose}>×</button></div>
-        <label>Title<input autoFocus value={value.title} onChange={(e) => setValue({ ...value, title: e.target.value })} placeholder="Start development server" /></label>
-        <label>Description<textarea className="notes" value={value.description} onChange={(e) => setValue({ ...value, description: e.target.value })} placeholder="When should you use this command?" /></label>
-        <label>Command or code<textarea className="code-input" value={value.command} onChange={(e) => setValue({ ...value, command: e.target.value, language: detectLanguage(e.target.value) })} placeholder="npm run dev" spellCheck={false} /></label>
+      <form className="snippet-editor large-editor" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-heading"><div><span className="eyebrow">{value.id ? "EDIT ENTRY" : "NEW ENTRY"}</span><h2>{value.id ? value.title : `Save ${kindLabel[value.kind].toLowerCase()}`}</h2></div><button type="button" onClick={onClose}>×</button></div>
+        <div className="kind-picker">{(["command", "code", "note"] as EntryKind[]).map((kind) => <button type="button" key={kind} className={value.kind === kind ? "active" : ""} onClick={() => setValue({ ...value, kind, language: kind === "note" ? "text" : value.language === "text" ? detectLanguage(value.content) : value.language })}>{kind === "command" ? "›_ Command" : kind === "code" ? "{ } Code / script" : "Aa Note"}</button>)}</div>
+        <label>Title<input autoFocus value={value.title} onChange={(e) => setValue({ ...value, title: e.target.value })} placeholder={value.kind === "note" ? "Deployment checklist" : "User creation helper"} /></label>
+        <label>Description<input value={value.description} onChange={(e) => setValue({ ...value, description: e.target.value })} placeholder="When or why is this useful?" /></label>
+        <label>{value.kind === "command" ? "Command" : value.kind === "code" ? "Code or script" : "Note"}<textarea className={`code-input ${value.kind === "code" ? "long-code-input" : ""}`} value={value.content} onChange={(e) => setValue({ ...value, content: e.target.value, language: value.kind === "note" ? "text" : detectLanguage(e.target.value) })} placeholder={value.kind === "note" ? "Write anything you want to remember…" : "Paste your code here…"} spellCheck={value.kind === "note"} /></label>
         <div className="editor-row">
-          <label>Language<select value={value.language} onChange={(e) => setValue({ ...value, language: e.target.value })}>{["shell", "sql", "elixir", "ruby", "typescript", "python", "json", "text"].map((lang) => <option key={lang}>{lang}</option>)}</select></label>
-          <label>Availability<select value={value.scope} onChange={(e) => setValue({ ...value, scope: e.target.value as Scope, project: e.target.value === "project" ? initial.project : "" })}><option value="project">{projectName} only</option><option value="global">Every project</option></select></label>
+          {codeLike && <label>Language<select value={value.language} onChange={(e) => setValue({ ...value, language: e.target.value })}>{["shell", "typescript", "javascript", "elixir", "python", "ruby", "sql", "json", "html", "css", "rust", "go", "php", "yaml", "text"].map((lang) => <option key={lang}>{lang}</option>)}</select></label>}
+          <label>Availability<select value={value.scope} onChange={(e) => setValue({ ...value, scope: e.target.value as Scope, project: e.target.value === "project" ? project.id : "" })}><option value="project">{project.name} only</option><option value="global">Every workspace</option></select></label>
         </div>
-        <label>Tags<input value={value.tags.join(", ")} onChange={(e) => setValue({ ...value, tags: e.target.value.split(",").map((tag) => tag.trim()) })} placeholder="dev, npm, local" /></label>
-        <div className="format-note">Detected as <b>{value.language}</b>. JSON and SQL are formatted when saved.</div>
-        <div className="dialog-actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Save command</button></div>
+        <label>Tags<input value={value.tags.join(", ")} onChange={(e) => setValue({ ...value, tags: e.target.value.split(",").map((tag) => tag.trim()) })} placeholder="elixir, auth, helper" /></label>
+        <div className="format-note">{value.kind === "code" ? <>Detected as <b>{value.language}</b> · {value.content.split("\n").length} lines · Shiki preview after saving.</> : "Notes are saved as readable plain text."}</div>
+        <div className="dialog-actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Save {kindLabel[value.kind].toLowerCase()}</button></div>
+      </form>
+    </div>
+  );
+}
+
+function ProjectCreator({ onClose, onCreate, onFolder }: { onClose: () => void; onCreate: (name: string) => void; onFolder?: () => void }) {
+  const [name, setName] = useState("");
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form className="project-creator" onSubmit={(e) => { e.preventDefault(); if (name.trim()) onCreate(name.trim()); }} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-heading"><div><span className="eyebrow">NEW WORKSPACE</span><h2>What are you keeping?</h2></div><button type="button" onClick={onClose}>×</button></div>
+        <p>A workspace can hold notes, code and commands without being connected to a folder.</p>
+        <label>Name<input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Backend notes" /></label>
+        <button className="create-workspace-primary" type="submit">Create empty workspace</button>
+        {onFolder && <button className="choose-folder-secondary" type="button" onClick={onFolder}>Or open a local project folder</button>}
       </form>
     </div>
   );
